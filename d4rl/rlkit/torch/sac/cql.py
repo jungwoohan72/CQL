@@ -23,7 +23,7 @@ class CQLTrainer(TorchTrainer):
             discount=0.99,
             reward_scale=1.0,
 
-            policy_lr=1e-3,
+            policy_lr=1e-4,
             qf_lr=1e-3,
             optimizer_class=optim.Adam,
 

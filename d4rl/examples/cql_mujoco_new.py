@@ -8,11 +8,13 @@ from rlkit.torch.sac.cql import CQLTrainer
 from rlkit.torch.networks import FlattenMlp
 from rlkit.torch.torch_rl_algorithm import TorchBatchRLAlgorithm
 
+from koopman_data_aug_KFC import koop_mixup_data_aug
+
 import argparse, os
 import numpy as np
 
 import h5py
-import d4rl, gym
+import d3rlpy, d4rl, gym
 
 def load_hdf5(dataset, replay_buffer):
     replay_buffer._observations = dataset['observations']
@@ -73,12 +75,31 @@ def experiment(variant):
         variant['replay_buffer_size'],
         expl_env,
     )
+
+    dataset, _ = d3rlpy.datasets.get_dataset(variant['env_name'])
+    new_dataset = koop_mixup_data_aug(eval_env,
+                                            dataset,
+                                            dvk_model_train = False,
+                                            n_aug = 0,
+                                            net_load = False,
+                                            args = [],
+                                            net = [],
+                                            epoch = 0,
+                                            use_all=False,
+                                            logging = False,
+                                            check_sweep = False,
+                                            dvk_model_dir="hopper-medium-v0_kmixup_seq_len_64/",
+                                            trial_len=512+256,
+                                            random_seed=2)
+
+    print(new_dataset["terminals"].shape)
+
     if variant['load_buffer'] and buffer_filename is not None:
         replay_buffer.load_buffer(buffer_filename)
     elif 'random-expert' in variant['env_name']:
-        load_hdf5(d4rl.basic_dataset(eval_env), replay_buffer) 
+        load_hdf5(new_dataset, replay_buffer) 
     else:
-        load_hdf5(d4rl.qlearning_dataset(eval_env), replay_buffer)
+        load_hdf5(new_dataset, replay_buffer)
        
     trainer = CQLTrainer(
         env=eval_env,
@@ -117,7 +138,7 @@ if __name__ == "__main__":
         replay_buffer_size=int(2E6),
         buffer_filename=None,
         load_buffer=None,
-        env_name='Hopper-v2',
+        env_name='hopper-medium-v0',
         sparse_reward=False,
         algorithm_kwargs=dict(
             num_epochs=3000,
@@ -162,10 +183,10 @@ if __name__ == "__main__":
     parser.add_argument("--max_q_backup", type=str, default="False")          # if we want to try max_{a'} backups, set this to true
     parser.add_argument("--deterministic_backup", type=str, default="True")   # defaults to true, it does not backup entropy in the Q-function, as per Equation 3
     parser.add_argument("--policy_eval_start", default=40000, type=int)       # Defaulted to 20000 (40000 or 10000 work similarly)
-    parser.add_argument('--min_q_weight', default=1.0, type=float)            # the value of alpha, set to 5.0 or 10.0 if not using lagrange
+    parser.add_argument('--min_q_weight', default=10.0, type=float)           # the value of alpha, set to 5.0 or 10.0 if not using lagrange
     parser.add_argument('--policy_lr', default=1e-4, type=float)              # Policy learning rate
     parser.add_argument('--min_q_version', default=3, type=int)               # min_q_version = 3 (CQL(H)), version = 2 (CQL(rho)) 
-    parser.add_argument('--lagrange_thresh', default=5.0, type=float)         # the value of tau, corresponds to the CQL(lagrange) version
+    parser.add_argument('--lagrange_thresh', default=-1.0, type=float)         # the value of tau, corresponds to the CQL(lagrange) version
     parser.add_argument('--seed', default=10, type=int)
 
     args = parser.parse_args()
@@ -187,6 +208,6 @@ if __name__ == "__main__":
     variant['seed'] = args.seed
 
     rnd = np.random.randint(0, 1000000)
-    setup_logger(os.path.join('CQL_offline_mujoco_runs', str(rnd)), variant=variant, base_log_dir='/nfs/kun1/users/aviralkumar/random_expert_CQL_runs')
-    ptu.set_gpu_mode(True)
+    setup_logger(os.path.join('CQL_offline_mujoco_runs', str(rnd)), variant=variant, base_log_dir='./log')
+    ptu.set_gpu_mode(False)
     experiment(variant)

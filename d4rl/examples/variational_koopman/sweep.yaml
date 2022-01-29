@@ -1,0 +1,29 @@
+program: train_variational_koopman_sweep.py
+method: bayes
+metric:
+  name: kl_loss
+  goal: maximize
+early_terminate:
+  type: hyperband
+  min_iter: 25000
+  eta: 1.5
+parameters:
+  learning_rate:
+    min: 0.0001
+    max: 0.1
+  latent_dim:
+    min: 30
+    max: 50
+  extractor_size:
+    values: [[128, 128, 128], [256, 128, 128], [256, 256, 128], [256, 256, 256], [64, 128, 256, 128, 64], [512, 512], [256, 128, 64], [512, 256, 256]]
+  inference_size:
+    values: [[128, 128, 128], [256, 128, 128], [256, 256, 128], [256, 256, 256], [64, 128, 256, 128, 64], [512, 512], [256, 128, 64], [512, 256, 256]]
+  prior_size:
+    values: [[128, 128, 128], [256, 128, 128], [256, 256, 128], [256, 256, 256], [64, 128, 256, 128, 64], [512, 512], [256, 128, 64], [512, 256, 256]]
+  rnn_size:
+    values: [128, 256, 512]
+  transform_size:
+    values: [128, 256, 512]
+  reg_weight:
+    min: 0.00001
+    max: 0.001
