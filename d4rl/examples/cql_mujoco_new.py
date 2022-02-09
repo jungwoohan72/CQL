@@ -88,11 +88,9 @@ def experiment(variant):
                                             use_all=False,
                                             logging = False,
                                             check_sweep = False,
-                                            dvk_model_dir="hopper-medium-v0_kmixup_seq_len_64/",
-                                            trial_len=512+256,
-                                            random_seed=2)
-
-    print(new_dataset["terminals"].shape)
+                                            dvk_model_dir="hopper-medium-v0_kmixup_seq_len_64_2/",
+                                            trial_len=768,
+                                            random_seed=5)
 
     if variant['load_buffer'] and buffer_filename is not None:
         replay_buffer.load_buffer(buffer_filename)
@@ -208,6 +206,6 @@ if __name__ == "__main__":
     variant['seed'] = args.seed
 
     rnd = np.random.randint(0, 1000000)
-    setup_logger(os.path.join('CQL_offline_mujoco_runs', str(rnd)), variant=variant, base_log_dir='./log')
+    setup_logger(os.path.join('CQL_offline_mujoco_runs', str(args.env)), variant=variant, base_log_dir='./log')
     ptu.set_gpu_mode(False)
     experiment(variant)

@@ -10,21 +10,21 @@ class VariationalKoopman():
         """
 
         # Placeholder for states and control inputs
-        self.x = tf.Variable(np.zeros((2*args.batch_size*args.seq_length, args.state_dim), dtype=np.float32), trainable=False, name="state_values")
-        self.u = tf.Variable(np.zeros((args.batch_size, 2*args.seq_length-1, args.action_dim), dtype=np.float32), trainable=False, name="action_values")
+        self.x = tf.Variable(np.zeros((2*args.batch_size*args.seq_length, args.state_dim), dtype=np.float64), trainable=False, name="state_values")
+        self.u = tf.Variable(np.zeros((args.batch_size, 2*args.seq_length-1, args.action_dim), dtype=np.float64), trainable=False, name="action_values")
         
         # Placeholders for values needed for ilqr
-        self.u_ilqr = tf.Variable(np.zeros((args.batch_size, args.seq_length, args.action_dim), dtype=np.float32), trainable=False, name="action_values_ilqr")
+        self.u_ilqr = tf.Variable(np.zeros((args.batch_size, args.seq_length, args.action_dim), dtype=np.float64), trainable=False, name="action_values_ilqr")
 
         # Parameters to be set externally
-        self.learning_rate = tf.Variable(0.0, trainable=False, name="learning_rate", dtype=np.float32)
-        self.kl_weight = tf.Variable(0.0, trainable=False, name="kl_weight", dtype=np.float32)
+        self.learning_rate = tf.Variable(0.0, trainable=False, name="learning_rate", dtype=np.float64)
+        self.kl_weight = tf.Variable(0.0, trainable=False, name="kl_weight", dtype=np.float64)
 
         # Normalization parameters to be stored
-        self.shift = tf.Variable(np.zeros(args.state_dim), trainable=False, name="state_shift", dtype=tf.float32)
-        self.scale = tf.Variable(np.zeros(args.state_dim), trainable=False, name="state_scale", dtype=tf.float32)
-        self.shift_u = tf.Variable(np.zeros(args.action_dim), trainable=False, name="action_shift", dtype=tf.float32)
-        self.scale_u = tf.Variable(np.zeros(args.action_dim), trainable=False, name="action_scale", dtype=tf.float32)
+        self.shift = tf.Variable(np.zeros(args.state_dim), trainable=False, name="state_shift", dtype=tf.float64)
+        self.scale = tf.Variable(np.zeros(args.state_dim), trainable=False, name="state_scale", dtype=tf.float64)
+        self.shift_u = tf.Variable(np.zeros(args.action_dim), trainable=False, name="action_shift", dtype=tf.float64)
+        self.scale_u = tf.Variable(np.zeros(args.action_dim), trainable=False, name="action_scale", dtype=tf.float64)
         
         # Create the computational graph
         self._create_feature_extractor_params(args)
@@ -55,13 +55,13 @@ class VariationalKoopman():
             else:
                 prev_size = args.extractor_size[i-1]
             self.extractor_w.append(tf.get_variable("extractor_w"+str(i), [prev_size, args.extractor_size[i]],
-                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float32))
-            self.extractor_b.append(tf.get_variable("extractor_b"+str(i), [args.extractor_size[i]], dtype=np.float32))
+                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float64))
+            self.extractor_b.append(tf.get_variable("extractor_b"+str(i), [args.extractor_size[i]], dtype=np.float64))
 
         # Last set of weights to map to output
         self.extractor_w.append(tf.get_variable("extractor_w_end", [args.extractor_size[-1], args.latent_dim], 
-                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float32))
-        self.extractor_b.append(tf.get_variable("extractor_b_end", [args.latent_dim], dtype=np.float32))
+                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float64))
+        self.extractor_b.append(tf.get_variable("extractor_b_end", [args.latent_dim], dtype=np.float64))
 
     def _get_extractor_output(self, args, states):
         """Function to run inputs through extractor
@@ -95,11 +95,11 @@ class VariationalKoopman():
         bwd_cell = tf.nn.rnn_cell.LSTMCell(args.rnn_size, initializer=tf.contrib.layers.xavier_initializer())
 
         # Construct input -- concatenate sequence of states with sequence of actions
-        padded_u = tf.concat([tf.zeros([args.batch_size, 1, args.action_dim], dtype=np.float32), self.u[:, :(args.seq_length-1)]], axis=1)
+        padded_u = tf.concat([tf.zeros([args.batch_size, 1, args.action_dim], dtype=np.float64), self.u[:, :(args.seq_length-1)]], axis=1)
         rnn_input = tf.concat([self.features[:, :args.seq_length], padded_u], axis=2)
         
         # Get outputs from rnn and concatenate
-        outputs, _ = tf.nn.bidirectional_dynamic_rnn(fwd_cell, bwd_cell, rnn_input, dtype=tf.float32)
+        outputs, _ = tf.nn.bidirectional_dynamic_rnn(fwd_cell, bwd_cell, rnn_input, dtype=tf.float64)
         output_fw, output_bw = outputs
         output = tf.concat([output_fw[:, -1], output_bw[:, -1]], axis=1)
 
@@ -137,13 +137,13 @@ class VariationalKoopman():
             else:
                 prev_size = args.inference_size[i-1]
             self.inference_w.append(tf.get_variable("inference_w"+str(i), [prev_size, args.inference_size[i]], 
-                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float32))
-            self.inference_b.append(tf.get_variable("inference_b"+str(i), [args.inference_size[i]], dtype=np.float32))
+                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float64))
+            self.inference_b.append(tf.get_variable("inference_b"+str(i), [args.inference_size[i]], dtype=np.float64))
 
         # Last set of weights to map to output
         self.inference_w.append(tf.get_variable("inference_w_end", [args.inference_size[-1], 2*args.latent_dim], 
-                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float32))
-        self.inference_b.append(tf.get_variable("inference_b_end", [2*args.latent_dim], dtype=np.float32))
+                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float64))
+        self.inference_b.append(tf.get_variable("inference_b_end", [2*args.latent_dim], dtype=np.float64))
  
     def _get_inference_distribution(self, args, features, u, g_enc):
         """Function to infer distribution over g
@@ -173,7 +173,7 @@ class VariationalKoopman():
 
         # Make standard deviation estimates better conditioned, otherwise could be problem early in training
         g_std = tf.minimum(tf.exp(g_logstd) + 1e-6, 10.0) 
-        samples = tf.random_normal([args.batch_size, args.latent_dim], seed=args.seed, dtype=np.float32)
+        samples = tf.random_normal([args.batch_size, args.latent_dim], seed=args.seed, dtype=np.float64)
         g = samples*g_std + g_mean
         return g
 
@@ -191,15 +191,15 @@ class VariationalKoopman():
 
         # Create parameters for transformation to be performed at output of GRU in observation encoder
         W_g_out = tf.get_variable("w_g_out", [args.rnn_size, args.transform_size], 
-                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float32)
-        b_g_out = tf.get_variable("b_g_out", [args.transform_size], dtype=np.float32)
+                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float64)
+        b_g_out = tf.get_variable("b_g_out", [args.transform_size], dtype=np.float64)
         W_to_g_enc = tf.get_variable("w_to_g_enc", [args.transform_size, args.latent_dim], 
-                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float32)
-        b_to_g_enc = tf.get_variable("b_to_g_enc", [args.latent_dim], dtype=np.float32)
+                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float64)
+        b_to_g_enc = tf.get_variable("b_to_g_enc", [args.latent_dim], dtype=np.float64)
 
         # Initialize single-layer GRU network to create observation encodings
         cell = tf.nn.rnn_cell.GRUCell(args.rnn_size, kernel_initializer=tf.contrib.layers.xavier_initializer())
-        self.rnn_state = cell.zero_state(args.batch_size, tf.float32)
+        self.rnn_state = cell.zero_state(args.batch_size, tf.float64)
         g_t = self.g_t
 
         for t in range(1, args.seq_length):
@@ -243,7 +243,7 @@ class VariationalKoopman():
         prior_params = tf.reshape(prior_params, [args.batch_size, args.seq_length-1, 2*args.latent_dim])
 
         # Construct diagonal unit Gaussian prior params for g1
-        g1_prior = tf.concat([tf.zeros([args.batch_size, 1, args.latent_dim], dtype=np.float32), tf.ones([args.batch_size, 1, args.latent_dim], dtype=np.float32)], axis=2)
+        g1_prior = tf.concat([tf.zeros([args.batch_size, 1, args.latent_dim], dtype=np.float64), tf.ones([args.batch_size, 1, args.latent_dim], dtype=np.float64)], axis=2)
 
         # Combine and reshape to get full set of prior distribution parameter values
         g_prior = tf.concat([g1_prior, prior_params], axis=1)
@@ -302,13 +302,13 @@ class VariationalKoopman():
             else:
                 prev_size = args.extractor_size[i+1]
             self.decoder_w.append(tf.get_variable("decoder_w"+str(len(args.extractor_size)-i), [prev_size, args.extractor_size[i]], 
-                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float32))
-            self.decoder_b.append(tf.get_variable("decoder_b"+str(len(args.extractor_size)-i), [args.extractor_size[i]], dtype=np.float32))
+                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float64))
+            self.decoder_b.append(tf.get_variable("decoder_b"+str(len(args.extractor_size)-i), [args.extractor_size[i]], dtype=np.float64))
 
         # Last set of weights to map to output
         self.decoder_w.append(tf.get_variable("decoder_w_end", [args.extractor_size[0], args.state_dim], 
-                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float32))
-        self.decoder_b.append(tf.get_variable("decoder_b_end", [args.state_dim], dtype=np.float32))
+                                                regularizer=tf.contrib.layers.l2_regularizer(args.reg_weight), dtype=np.float64))
+        self.decoder_b.append(tf.get_variable("decoder_b_end", [args.state_dim], dtype=np.float64))
 
     def _get_decoder_output(self, args, encodings):
         """Function to run inputs through decoder

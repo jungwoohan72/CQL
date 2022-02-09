@@ -6,8 +6,6 @@ import numpy as np
 import random
 import tensorflow as tf
 import time
-import torch
-
 from d3rlpy.dataset import MDPDataset
 
 def koop_mixup_data_aug(env,
@@ -25,8 +23,9 @@ def koop_mixup_data_aug(env,
                         trial_len=512+256,
                         random_seed=1):
 
+    from replay_memory import ReplayMemory
     from variational_koopman.train_variational_koopman import training
-
+    
     np.random.seed(random_seed)
 
     # augmented data amount. If not set, augmented data amount = original dataset amount
@@ -34,15 +33,18 @@ def koop_mixup_data_aug(env,
     if n_aug == 0:
         n_aug = int(len(dataset.rewards))
 
-    len_traj = None
-    qlearning_dataset = d4rl_dataset(env, trial_len, len_traj, random_seed)
+    ## load data
+    observations = dataset.observations
+    actions = dataset.actions
+    rewards = dataset.rewards
+    terminals = dataset.terminals
 
     ## prepare dataset for dvk learning x : (datapoints, seq_length, x_dim), u : (datapoints, seq_length, u_dim)
     if use_all:
-        x, u, config = data_generate_all(env, dataset, trial_len, random_seed)
+        x,u,config = data_generate_all(env, dataset)
 
     else:
-        x, u, config = data_generate(env, dataset, trial_len, random_seed)
+        x,u,config = data_generate(env, dataset, trial_len, random_seed)
 
     state_dim = x.shape[2] # Observation dim + 1 for reward
     act_dim = u.shape[2]
@@ -76,7 +78,7 @@ def koop_mixup_data_aug(env,
             if check_sweep:
                 saver.restore(sess, os.path.join(args.save_dir, '../variational_koopman/checkpoints/astral/dvk.ckpt-{}'.format(59))) # load specific learned dvk model when skip = True
             else:
-                saver.restore(sess, os.path.join(args.save_dir, dvk_model_dir + "dvk.ckpt-{}".format(59))) # load specific learned dvk model when skip = True
+                saver.restore(sess, os.path.join(args.save_dir, dvk_model_dir + "dvk.ckpt-{}".format(80))) # load specific learned dvk model when skip = True
 
         shift_x = net.shift.eval(session = sess)
         scale_x = net.scale.eval(session = sess)
@@ -95,9 +97,9 @@ def koop_mixup_data_aug(env,
             x_temp = x[i*2*args.seq_length*args.batch_size:(i+1)*2*args.seq_length*args.batch_size, :]
             u_temp = np.reshape(u[i*(2*args.seq_length-1)*args.batch_size:(i+1)*(2*args.seq_length-1)*args.batch_size,:], (args.batch_size, 2*args.seq_length-1,args.action_dim))
             z_temp = x_to_z(sess, net, x_temp, u_temp) ## embedding network. data points are embedded with batch size
-            z = np.concatenate((z, z_temp), axis = 0)
+            z = np.concatenate((z, z_temp), axis = 0)    
 
-        alpha = 0.2 ## mixup alpha value for beta distribution
+        alpha = 0.1 ## mixup alpha value for beta distribution
         lam = np.random.beta(alpha, alpha, size = (n_aug,1))
         lam = np.float64(lam)
 
@@ -107,107 +109,56 @@ def koop_mixup_data_aug(env,
         mix_z_n = lam * z[mix_1_idx_z_n,:] + (1-lam)*z[mix_2_idx_z_n,:] ## _n means next. next latent state
         u = u*scale_u + shift_u
         mix_u = lam * u[mix_1_idx_u,:] + (1-lam)*u[mix_2_idx_u,:]
-        # mix_u_n = lam * u[mix_1_idx_u_n,:] + (1-lam)*u[mix_2_idx_u_n,:]
+        mix_u_n = lam * u[mix_1_idx_u_n,:] + (1-lam)*u[mix_2_idx_u_n,:]
         mix_x = net._get_decoder_output(args, mix_z)*net.scale + net.shift  ## reconstruct linear state z to x
-        mix_x_n = net._get_decoder_output(args, mix_z_n)*net.scale + net.shift ##
+        mix_x_n = net._get_decoder_output(args, mix_z_n)*net.scale + net.shift ## 
 
-        mix_x = mix_x.eval(session = sess)
+        mix_x = mix_x.eval(session = sess) 
         mix_x_n = mix_x_n.eval(session = sess)
 
-    obs, next_obs, acts, rews, tems = to_trans(mix_x, mix_x_n, mix_u)
+
+    obs, acts, rews, epi_tems, tems = to_trans(mix_x, mix_x_n, mix_u, mix_u_n)
 
     ## add to original dataset
-    qlearning_dataset["observations"] = np.concatenate((qlearning_dataset["observations"], obs), axis = 0).astype(np.float32)
-    qlearning_dataset["next_observations"] = np.concatenate((qlearning_dataset["next_observations"], next_obs), axis = 0).astype(np.float32)
-    qlearning_dataset["actions"] = np.concatenate((qlearning_dataset["actions"], acts), axis = 0).astype(np.float32)
-    qlearning_dataset["rewards"] = np.concatenate((qlearning_dataset["rewards"], rews), axis = 0).astype(np.float32)
-    qlearning_dataset["terminals"] = np.concatenate((qlearning_dataset["terminals"], tems), axis = 0).astype(np.float32)
+    observations = np.concatenate((observations, obs), axis = 0)
+    actions = np.concatenate((actions, acts), axis = 0)
+    rewards = np.concatenate((rewards, rews))
+    epi_terminals = np.concatenate((terminals, epi_tems))
+    terminals = np.concatenate((terminals, tems))
 
-    # new_dataset = DicToDataset(qlearning_dataset)
-
-    # loader = torch.utils.data.DataLoader(new_dataset, batch_size=256, num_workers=2, shuffle=True)
+    # genearate MDPDataset
+    new_dataset = MDPDataset(observations, actions, rewards, terminals, epi_terminals)
 
     # episode.transitions
-    print("================================")
-    print("Augmented Transitions: ", n_aug)
-    print("Total Number of Transitions: ", len(qlearning_dataset["observations"]))
-    print("================================")
+    print('MDP dataset generated')
+    print(n_data, n_aug, len(observations))
+    return new_dataset, args, net, epoch
 
-    return qlearning_dataset
-
-def d4rl_dataset(env, trial_len, len_traj, random_seed):
-    import d4rl
-
-    def choice(x):
-        if x: return 0
-        else: return 1
-
-    np.random.seed(random_seed)
-    # np.random.shuffle(len_traj)
-
-    dataset = d4rl.qlearning_dataset(env)
-    # terminals = list(map(choice, dataset['terminals']))
-    # dataset['terminals'] = terminals
-
-
-
-    # len_traj_cumsum = np.cumsum(len_traj).astype(int)
-    # len_traj_cumsum[-1] = int(len(dataset["observations"]))
-
-    # dic = dict()
-    # dic["observations"] = None
-    # dic["actions"] = None
-    # dic["next_observations"] = None
-    # dic["rewards"] = None
-    # dic["terminals"] = None
-
-    # for i in range(len(len_traj_cumsum)):
-    #     if i == 0:
-    #         if len_traj[i] > trial_len:
-    #             dic["observations"] = dataset["observations"][:(len_traj[i])]
-    #             dic["next_observations"] = dataset["next_observations"][:(len_traj[i])]
-    #             dic["actions"] = dataset["actions"][:(len_traj[i])]
-    #             dic["rewards"] = dataset["rewards"][:(len_traj[i])]
-    #             dic["terminals"] = dataset["terminals"][:(len_traj[i])]
-    #     else:
-    #         if len_traj[i] > trial_len:
-    #             dic["observations"] = dataset["observations"][len_traj_cumsum[i-1]:len_traj_cumsum[i]] \
-    #                 if dic["observations"] is None \
-    #                 else np.concatenate((dic["observations"], dataset["observations"][len_traj_cumsum[i-1]:len_traj_cumsum[i]]), axis=0)
-    #             dic["next_observations"] = dataset["next_observations"][len_traj_cumsum[i-1]:len_traj_cumsum[i]] \
-    #                 if dic["next_observations"] is None \
-    #                 else np.concatenate((dic["next_observations"], dataset["next_observations"][len_traj_cumsum[i-1]:len_traj_cumsum[i]]), axis=0)
-    #             dic["actions"] = dataset["actions"][len_traj_cumsum[i-1]:len_traj_cumsum[i]] \
-    #                 if dic["actions"] is None \
-    #                 else np.concatenate((dic["actions"], dataset["actions"][len_traj_cumsum[i-1]:len_traj_cumsum[i]]), axis=0)
-    #             dic["rewards"] = dataset["rewards"][len_traj_cumsum[i-1]:len_traj_cumsum[i]] \
-    #                 if dic["rewards"] is None \
-    #                 else np.concatenate((dic["rewards"], dataset["rewards"][len_traj_cumsum[i-1]:len_traj_cumsum[i]]), axis=0)
-    #             dic["terminals"] = dataset["terminals"][len_traj_cumsum[i-1]:len_traj_cumsum[i]] \
-    #                 if dic["terminals"] is None \
-    #                 else np.concatenate((dic["terminals"], dataset["terminals"][len_traj_cumsum[i-1]:len_traj_cumsum[i]]), axis=0)
-
-
-
-    print("================================")
-    print("D4RL Total Transitions: ", len(dataset["observations"]))
-    print("================================")
-
-    return dataset
-
-def to_trans(mix_x, mix_x_n, mix_u):
+def to_trans(mix_x, mix_x_n, mix_u, mix_u_n):
     n_aug = len(mix_x)
+    
+    obs = np.zeros((n_aug*2,mix_x[0].size-1)) ## s,a,r,tem, epi_tem for one timestep. two data points will make one transition (s, a, r, s')
+    acts = np.zeros((n_aug*2,mix_u[0].size))
+    rews = np.zeros((n_aug*2))
+    tems = np.zeros(n_aug*2)
+    epi_tems = np.zeros(n_aug*2)
+    prev_list = np.linspace(0,n_aug*2-2,n_aug, dtype = int)
+    next_list = prev_list +1
 
-    obs = mix_x[:,:-1]
-    next_obs = mix_x_n[:,:-1]
-    acts = mix_u
-    rews = mix_x[:,-1]
-    tems = np.zeros(n_aug)
 
-    assert len(obs) == len(next_obs) and len(obs) == len(acts) and len(obs) == len(rews) and len(obs) == len(tems), \
-        "Unequal number of obs, next_obs, acts, rews, tems"
+    temp = mix_x[:,:-1]
+    obs[prev_list,:] = mix_x[:,:-1]
+    obs[next_list,:] = mix_x_n[:,:-1]
+    acts[prev_list,:] = mix_u
+    acts[next_list,:] = mix_u_n
+    rews[prev_list] = mix_x[:,-1]
+    rews[next_list] = mix_x_n[:,-1]
+    tems[prev_list] = 0
+    tems[next_list] = 0 ## environment terminal is False
+    epi_tems[prev_list] = 0
+    epi_tems[next_list] = 1 ## episode terminal is True to make the episode has one transition.
 
-    return obs, next_obs, acts, rews, tems
+    return obs, acts, rews, epi_tems, tems
 
 def x_to_z(sess, net, x, u):
     # Construct inputs for network
@@ -221,14 +172,14 @@ def x_to_z(sess, net, x, u):
 
     return z1
 
-def mixup_data_aug(env, dataset, n_aug = 0):
+def mixup_data_aug(env, dataset, n_aug = 0):  
     ## it is for normal mixup augmentation
 
     # data amount
     if n_aug == 0:
         n_aug = len(dataset.rewards)
     # n_data = len(dataset.rewards)
-
+    
     ## load data
     observations = dataset.observations
     actions = dataset.actions
@@ -247,14 +198,14 @@ def mixup_data_aug(env, dataset, n_aug = 0):
     act_dim = u.shape[2]
     seq_length = int(x.shape[1]/2)
     class args():
-        def __init__(self, seq_length, state_dim, act_dim):
+        def __init__(self, seq_length, state_dim, act_dim):        
             self.seq_length = seq_length
             self.state_dim = state_dim
             self.action_dim = act_dim
             self.batch_size = 32
     args = args(seq_length, state_dim, act_dim)
     x = np.reshape(x, (2*n_data*args.seq_length, args.state_dim))
-    u = np.reshape(u, (n_data*(2*args.seq_length-1), args.action_dim))
+    u = np.reshape(u, (n_data*(2*args.seq_length-1), args.action_dim))    
     mix_1_idx_z, mix_2_idx_z, mix_1_idx_u, mix_2_idx_u, mix_1_idx_z_n, mix_2_idx_z_n, mix_1_idx_u_n, mix_2_idx_u_n = pick_mix_idx(int(n_data/args.batch_size)*args.batch_size, n_aug, args)
 
     mix_x = lam * x[mix_1_idx_z,:] + (1-lam)*x[mix_2_idx_z,:]
@@ -276,12 +227,7 @@ def mixup_data_aug(env, dataset, n_aug = 0):
 
     # episode.transitions
     print('MDP dataset generated')
-    print("================================")
-    print("Original Number of Samples: ", n_data)
-    print("Augmented Samples: ", n_aug)
-    print("Total Number of Samples: ", len(observations))
-    print("================================")
-
+    print(n_data, n_aug, len(observations))
     return new_dataset
 
 def pick_mix_idx(n_data, n_aug, args):
@@ -347,13 +293,7 @@ def data_generate(env, dataset, trial_len, random_seed):
             traj_index.append(index)
             count = count + 1
 
-    target_traj = np.array(dataset.episodes)[(len_traj>trial_len)]
-    tot_len = np.sum(len_traj[(len_traj > trial_len)])
-
-    print("================================")
-    print("d3rlpy Total Trajectory Length: ", tot_len)
-    print('n_trials : {}'.format(len(target_traj)))
-    print("================================")
+    print('n_trials : {}'.format(count))
 
     n_trials = count
 
@@ -374,7 +314,7 @@ def data_generate(env, dataset, trial_len, random_seed):
     stagger = (trial_len - seq_length)/n_subseq
     start_idxs = np.linspace(0, stagger*n_subseq, n_subseq)
 
-    total_subseq = 0
+    sample_num = 0
     idx = 0
     np.random.shuffle(traj_index)
 
@@ -402,9 +342,9 @@ def data_generate(env, dataset, trial_len, random_seed):
             x[i, j] = x_trial[int(start_idxs[j]):(int(start_idxs[j])+seq_length)]
             u[i, j] = u_trial[int(start_idxs[j]):(int(start_idxs[j])+seq_length-1)]
 
-        total_subseq += n_subseq
+        sample_num += n_subseq
         idx += 1
-        if total_subseq > 34000: # You can change this number to whatever you want
+        if sample_num > 50000: # You can change this number to whatever you want
             break
 
     x = x[:idx]
@@ -415,7 +355,7 @@ def data_generate(env, dataset, trial_len, random_seed):
     u = u.reshape(-1, seq_length-1, action_dim)
 
     print("================================")
-    print("Total Number of Sub Sequences: ", total_subseq)
+    print("Total Number of Sub Sequences: ", sample_num)
     print("================================")
 
     return x, u, config
@@ -438,13 +378,25 @@ def data_generate_all(env, dataset, trial_len, random_seed):
     x = np.zeros((1, seq_length, state_dim), dtype=np.float64)
     u = np.zeros((1, seq_length-1, action_dim), dtype=np.float64)
 
-    n_trials = len(dataset)
-    traj_index = np.arange(n_trials)
-    idx = 0
+    # Counting # of available episodes that is longer than trial_len
+    len_traj = np.zeros((len(dataset.episodes)))
+    for i in range(len(dataset.episodes)):
+        len_traj[i] = len(dataset.episodes[i])
+
+    count = 0
+    traj_index = []
+    for index, item in enumerate(len_traj):
+        if item >= trial_len:
+            traj_index.append(index)
+            count = count + 1
+
+    print('n_trials : {}'.format(count))
+
+    n_trials = count
     np.random.shuffle(traj_index)
 
-    for i in traj_index:
-        target_episode = dataset[i]
+    for i in range(n_trials):
+        target_episode = dataset.episodes[traj_index[i]]
 
         trial_len = len(target_episode.observations)
 
@@ -482,8 +434,6 @@ def data_generate_all(env, dataset, trial_len, random_seed):
 
             x = np.concatenate((x, temp_x[None,:,:]), axis = 0)
             u = np.concatenate((u, temp_u[None,:,:]), axis = 0)
-
-        idx += 1
 
     print("================================")
     print(n_trials, " Trajectories selected")
